@@ -1,0 +1,30 @@
+= Computer Vision Project report =
+
+Group (DJ Ninja) members
+Aditya Keswani
+Ritwik Roy
+
+Algorithm:
+Create a descriptor matcher
+While the array of images has more than one image:
+	Compare the first image image with all the other images for keypoint matches, selecting the one with which it has the most matches.
+	With the first image and the best matched image from the previous step:
+		Create a blank resultant image and copy the second image to the centre of that result
+		SURF is used to extract keypoints from both images into two lists, keypoints1 and keypoints2	
+		Keypoints between the two are matched, using a nearest neighbour algorithm to determine.
+		As a side step, an image is drawn with the two images side by side and lines connecting the matched keypoints
+		For each matched keypoint pair
+			Put the keypoint from the first image into a list
+			Translate the second keypoint to where it should be in the image
+			Put the translated keypoint into a second list, at the same index/position as its corresponding keypoint in the other list
+		A homography matrix is generated from the two lists above, using the RANSAC algorithm
+		This homography matrix is then used to do a perspective warp of the first image into the result (which already has the second image)
+		The resultant stitched image is cropped and returned
+	The returned image is put back into the array in place of the first image (and the second image is removed from the array)
+
+
+
+Testing procedures
+
+
+
