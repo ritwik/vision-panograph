@@ -11,6 +11,10 @@ Mat stitchImages(Mat img1, Mat img2, Mat img1rgb, Mat img2rgb, Ptr<GenericDescri
 Mat cropBlack(Mat toCrop, Mat toCropGray);
 vector<int> findBestMatch(Mat img, vector<Mat> imgs, Ptr<GenericDescriptorMatcher> descriptorMatcher);
 
+vector<float> minAvg;
+vector<int> minIndex;
+bool firstTime;
+
 void help() {
     printf("Use the SURF descriptor to match keypoints between 2 images, show the correspondences, and show the stitched images\n");
     printf("Format: \n./panograph <algorithm> <XML params> <image1> <image2> ...\n");
@@ -47,17 +51,30 @@ int main(int argc, char** argv) {
         imgs_rgb.push_back(imread(imgNames[i].c_str(), 1));
     }
 
+    //Set up the min avg and index vectors
+    for (int i = 0; i < imgs.size(); i++) {
+        minAvg.push_back(0);
+        minIndex.push_back(-1);
+    }
+    //Indicate that this is the first time we're checking matches
+    firstTime = true;
+
     while (imgs.size() > 1) {
         vector<int> bestMatches = findBestMatch(imgs.front(), imgs, descriptorMatcher);
-        printf("%d %d %d\n", imgs_rgb[bestMatches[1]].type(), imgs_rgb[bestMatches[1]].depth(), imgs_rgb[bestMatches[1]].channels());
+
+        printf("Stitching images %d and %d\n", bestMatches[0], bestMatches[1]);
+        imwrite("blah1.jpg", imgs_rgb[bestMatches[0]]);
+        imwrite("blah2.jpg", imgs_rgb[bestMatches[1]]);
         imgs_rgb[bestMatches[0]] = stitchImages(imgs[bestMatches[0]], imgs[bestMatches[1]], imgs_rgb[bestMatches[0]], imgs_rgb[bestMatches[1]], descriptorMatcher);
 
         Mat stitchedGray;
         cvtColor(imgs_rgb[bestMatches[0]], stitchedGray, CV_RGB2GRAY);
         imgs[bestMatches[0]] = stitchedGray;
 
+        //Newly stitched image is stored in bestMatches[0], so we erase image at bestMatches[1]
+        printf("Erasing image %d\n", bestMatches[1]);
         imgs.erase(imgs.begin() + bestMatches[1]);
-        imgs_rgb.erase(imgs.begin() + bestMatches[1]);
+        imgs_rgb.erase(imgs_rgb.begin() + bestMatches[1]);
     }
     imwrite("result.jpg", imgs_rgb[0]);
 }
@@ -66,8 +83,7 @@ Mat stitchImages(Mat img1, Mat img2, Mat img1rgb, Mat img2rgb, Ptr<GenericDescri
     Size size1 = img1.size();
     Size size2 = img2.size();
 
-    //Create a large image with image2 in the center so we can
-    //draw image1 in
+    //Create a large image with image2 in the center so we can draw image1 in
     printf("Setting up result image...\n");
     Mat result(Size(size2.width * 3, size2.height * 3), img2rgb.type(), Scalar(0,0,0));
     Rect img2ROI = Rect(size2.width, size2.height, size2.width, size2.height);
@@ -77,7 +93,7 @@ Mat stitchImages(Mat img1, Mat img2, Mat img1rgb, Mat img2rgb, Ptr<GenericDescri
     printf("Result rows %d, result cols %d\n", result.rows, result.cols);
     printf("Size width %d, size height %d\n", size2.width, size2.height);
 
-    SURF surf_extractor(8.0e3);
+    SURF surf_extractor(10.0e3);
 
     printf("Extracting keypoints...\n");
     vector<KeyPoint> keypoints1;
@@ -128,6 +144,7 @@ Mat stitchImages(Mat img1, Mat img2, Mat img1rgb, Mat img2rgb, Ptr<GenericDescri
     return croppedResult;
 }
 
+//Crops toCrop to a rectangular image by looking at the first and last non-zero pixels
 Mat cropBlack(Mat toCrop, Mat toCropGray) {
     int minCol = toCropGray.cols;
     int minRow = toCropGray.rows;
@@ -151,47 +168,60 @@ Mat cropBlack(Mat toCrop, Mat toCropGray) {
     return cropped;
 }
 
+//Looks for the next images to stitch together by "quickly" testing all permutations
 vector<int> findBestMatch(Mat img, vector<Mat> imgs, Ptr<GenericDescriptorMatcher> descriptorMatcher) {
+    //Use a high threshold so as to get fewer and stronger keypoints
     SURF surf_extractor(20.0e3);
 
-    float minAvg[imgs.size()];
-    int minIndex[imgs.size()];
+    //We don't need to check the last image, since it would have already been matched against all the others
     for (int i = 0; i < imgs.size(); i++) {
-        minAvg[i] = 0;
-        minIndex[i] = 0;
+        //if (minIndex[i] < 0) {
+            printf("Image %d must be recalculated\n", i);
+
+            //Calculate keypoints of current image
+            vector<KeyPoint> keypoints1;
+            surf_extractor(imgs[i], Mat(), keypoints1);
+
+            float currAvg[imgs.size()];
+
+            //The first time we do matches, we check all images, so we don't need to redo any of the earlier ones
+            //Later times, we do need to go back and recheck them
+            int j = firstTime ? i + 1 : 0;
+            for (; j < imgs.size(); j++) {
+                //Calculate keypoints of other image
+                vector<KeyPoint> keypoints2;
+                surf_extractor(imgs[j], Mat(), keypoints2);
+                vector<DMatch> matches1to2;
+
+                //Find matches between current image and other image
+                descriptorMatcher->match(imgs[i], keypoints1, imgs[j], keypoints2, matches1to2);
+
+                //Find average of distances of matches
+                for (int k = 0; k < matches1to2.size(); k++) {
+                    currAvg[j] = currAvg[j] + matches1to2[k].distance;
+                }
+                currAvg[j] = currAvg[j] / matches1to2.size();
+            }
+
+            //Find the lowest average between current image and other images
+            float currMinAvg = 90001;
+            int currMinIndex = -1;
+            for (int j = i + 1; j < imgs.size(); j++) {
+                if (currAvg[j] < currMinAvg) {
+                    currMinAvg = currAvg[j];
+                    currMinIndex = j;
+                }
+            }
+            minAvg[i] = currMinAvg;
+            minIndex[i] = currMinIndex;
+        //} else {
+        //    printf("Image %d had already been calculated\n", i);
+        //}
+
+        //firstTime = false;
     }
 
-    for (int i = 0; i < imgs.size(); i++) {
-        vector<KeyPoint> keypoints1;
-        surf_extractor(imgs[i], Mat(), keypoints1);
-
-        float currAvg[imgs.size()];
-        for (int j = i + 1; j < imgs.size(); j++) {
-            vector<KeyPoint> keypoints2;
-            surf_extractor(imgs[j], Mat(), keypoints2);
-            vector<DMatch> matches1to2;
-            descriptorMatcher->match(imgs[i], keypoints1, imgs[j], keypoints2, matches1to2);
-            for (int k = 0; k < matches1to2.size(); k++) {
-                printf("%f\n", matches1to2[k].distance);
-                currAvg[j] = currAvg[j] + matches1to2[k].distance;
-            }
-            currAvg[j] = currAvg[j] / matches1to2.size();
-            printf("CurrNumMatches %f\n", currAvg[j]);
-        }
-
-        float currMinAvg = 90001;
-        int currMinIndex = -1;
-        for (int j = i + 1; j < imgs.size(); j++) {
-            if (currAvg[j] < currMinAvg) {
-                currMinAvg = currAvg[j];
-                currMinIndex = j;
-            }
-        }
-
-        minAvg[i] = currMinAvg;
-        minIndex[i] = currMinIndex;
-    }
-
+    //Find lowest average between all images
     float finalMinAvg = 90001;
     int finalMinIndex1 = 0;
     int finalMinIndex2 = 0;
@@ -202,13 +232,21 @@ vector<int> findBestMatch(Mat img, vector<Mat> imgs, Ptr<GenericDescriptorMatche
             finalMinIndex1 = j;
             finalMinIndex2 = minIndex[j];
         }
-
     }
 
     printf("Highest number of matches was between %d and %d, there were %f\n", finalMinIndex1, finalMinIndex2, finalMinAvg);
 
+    //Return the indexes of the images that had the lowest average distance
     vector<int> minIndexes;
-    minIndexes.push_back(finalMinIndex1);
     minIndexes.push_back(finalMinIndex2);
+    minIndexes.push_back(finalMinIndex1);
+
+    //Now reset the average match values for the first image we are about to stitch
+    //minIndex[minIndexes[0]] = -1;
+
+    //And erase the values for the second one
+    //minIndex.erase(minIndex.begin() + minIndexes[1]);
+
+
     return minIndexes;
 }
