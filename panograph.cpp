@@ -7,8 +7,9 @@
 
 using namespace cv;
 
-Mat stitchImages(Mat img1, Mat img2, Ptr<GenericDescriptorMatcher> descriptorMatcher);
-Mat cropBlack(Mat toCrop);
+Mat stitchImages(Mat img1, Mat img2, Mat img1rgb, Mat img2rgb, Ptr<GenericDescriptorMatcher> descriptorMatcher);
+Mat cropBlack(Mat toCrop, Mat toCropGray);
+vector<int> findBestMatch(Mat img, vector<Mat> imgs, Ptr<GenericDescriptorMatcher> descriptorMatcher);
 
 void help() {
     printf("Use the SURF descriptor to match keypoints between 2 images, show the correspondences, and show the stitched images\n");
@@ -39,46 +40,39 @@ int main(int argc, char** argv) {
     }
 
     printf("Reading images...\n");
-    Mat imgs[imgCount];
-    Mat imgs_rgb[imgCount];
+    vector<Mat> imgs;
+    vector<Mat> imgs_rgb;
     for (int i = 0; i < imgCount; i++) {
-        imgs[i] = imread(imgNames[i].c_str(), 0);
-        imgs_rgb[i] = imread(imgNames[i].c_str(), -1);
+        imgs.push_back(imread(imgNames[i].c_str(), 0));
+        imgs_rgb.push_back(imread(imgNames[i].c_str(), 1));
     }
 
-    //Need a pair of likely matches
-    //So take the first image and find the one it best compares to
-    //So we find numMatches or something? Or just get the max? Yep.
-    //Just need to return one number: the index of the best match
-    //while (imgCount > 1) {
-    //    find first non NULL
-    //    send it to the bestMatch function
-    //    then stitch it with the best match
-    //    then set the first to NULL
-    //    and add the result to the array where the best match was
-    //    problem is the result image has black everywhere and is too LARGE_INTEGER
-    //    how to prevent that?
-    //}
+    while (imgs.size() > 1) {
+        vector<int> bestMatches = findBestMatch(imgs.front(), imgs, descriptorMatcher);
+        printf("%d %d %d\n", imgs_rgb[bestMatches[1]].type(), imgs_rgb[bestMatches[1]].depth(), imgs_rgb[bestMatches[1]].channels());
+        imgs_rgb[bestMatches[0]] = stitchImages(imgs[bestMatches[0]], imgs[bestMatches[1]], imgs_rgb[bestMatches[0]], imgs_rgb[bestMatches[1]], descriptorMatcher);
 
-    Mat img = stitchImages(imgs[0], imgs[1], descriptorMatcher); //Need to swap these around or something so that the bigger image is what determines the canvas size!
-    Mat img2 = stitchImages(img, imgs[2], descriptorMatcher);
-    Mat img3 = stitchImages(img2, imgs[3], descriptorMatcher);
-    Mat img4 = stitchImages(img3, imgs[4], descriptorMatcher);
-    Mat img5 = stitchImages(img4, imgs[5], descriptorMatcher);
-    imwrite("result.jpg", img5);
+        Mat stitchedGray;
+        cvtColor(imgs_rgb[bestMatches[0]], stitchedGray, CV_RGB2GRAY);
+        imgs[bestMatches[0]] = stitchedGray;
+
+        imgs.erase(imgs.begin() + bestMatches[1]);
+        imgs_rgb.erase(imgs.begin() + bestMatches[1]);
+    }
+    imwrite("result.jpg", imgs_rgb[0]);
 }
 
-Mat stitchImages(Mat img1, Mat img2, Ptr<GenericDescriptorMatcher> descriptorMatcher) {
+Mat stitchImages(Mat img1, Mat img2, Mat img1rgb, Mat img2rgb, Ptr<GenericDescriptorMatcher> descriptorMatcher) {
     Size size1 = img1.size();
     Size size2 = img2.size();
 
     //Create a large image with image2 in the center so we can
     //draw image1 in
     printf("Setting up result image...\n");
-    Mat result(Size(size2.width * 3, size2.height * 3), CV_8UC1, Scalar(0));
+    Mat result(Size(size2.width * 3, size2.height * 3), img2rgb.type(), Scalar(0,0,0));
     Rect img2ROI = Rect(size2.width, size2.height, size2.width, size2.height);
     Mat centreOfResult = result(img2ROI);
-    img2.copyTo(centreOfResult);
+    img2rgb.copyTo(centreOfResult);
 
     printf("Result rows %d, result cols %d\n", result.rows, result.cols);
     printf("Size width %d, size height %d\n", size2.width, size2.height);
@@ -100,7 +94,7 @@ Mat stitchImages(Mat img1, Mat img2, Ptr<GenericDescriptorMatcher> descriptorMat
 
     printf("Drawing correspondences... \n");
     Mat img_corr;
-    drawMatches(img1, keypoints1, img2, keypoints2, matches1to2, img_corr);
+    drawMatches(img1rgb, keypoints1, img2rgb, keypoints2, matches1to2, img_corr);
     imwrite("correspondences.jpg", img_corr);
 
     printf("Finding homography...\n");
@@ -120,26 +114,28 @@ Mat stitchImages(Mat img1, Mat img2, Ptr<GenericDescriptorMatcher> descriptorMat
         translated.y = translated.y + size2.height;
         points2.push_back(translated);
     }
-    Mat H = findHomography(Mat(points1), Mat(points2), RANSAC, 85);
+    Mat H = findHomography(Mat(points1), Mat(points2), RANSAC, 50);
 
     printf("Applying perspective warp...\n");
-    warpPerspective(img1, result, H, result.size(), INTER_LINEAR, BORDER_TRANSPARENT);
+    warpPerspective(img1rgb, result, H, result.size(), INTER_LINEAR, BORDER_TRANSPARENT);
+    Mat resultGray;
+    cvtColor(result, resultGray, CV_RGB2GRAY);
 
     printf("Cropping image...\n");
     imwrite("resultUncropped.jpg", result);
-    Mat croppedResult = cropBlack(result);
+    Mat croppedResult = cropBlack(result, resultGray);
 
     return croppedResult;
 }
 
-Mat cropBlack(Mat toCrop) {
-    int minCol = toCrop.cols;
-    int minRow = toCrop.rows;
+Mat cropBlack(Mat toCrop, Mat toCropGray) {
+    int minCol = toCropGray.cols;
+    int minRow = toCropGray.rows;
     int maxCol = 0;
     int maxRow = 0;
-    for (int i = 0; i < toCrop.rows - 3; i++) {
-        for (int j = 0; j < toCrop.cols; j++) {
-            if (toCrop.at<char>(i, j) != 0) {
+    for (int i = 0; i < toCropGray.rows - 3; i++) {
+        for (int j = 0; j < toCropGray.cols; j++) {
+            if (toCropGray.at<char>(i, j) != 0) {
                 if (i < minRow) {minRow = i;}
                 if (j < minCol) {minCol = j;}
                 if (i > maxRow) {maxRow = i;}
@@ -155,7 +151,64 @@ Mat cropBlack(Mat toCrop) {
     return cropped;
 }
 
-//Todo:
-//- Get it working on colour images
-//- Figure out why I'm still getting explosions
-//-
+vector<int> findBestMatch(Mat img, vector<Mat> imgs, Ptr<GenericDescriptorMatcher> descriptorMatcher) {
+    SURF surf_extractor(20.0e3);
+
+    float minAvg[imgs.size()];
+    int minIndex[imgs.size()];
+    for (int i = 0; i < imgs.size(); i++) {
+        minAvg[i] = 0;
+        minIndex[i] = 0;
+    }
+
+    for (int i = 0; i < imgs.size(); i++) {
+        vector<KeyPoint> keypoints1;
+        surf_extractor(imgs[i], Mat(), keypoints1);
+
+        float currAvg[imgs.size()];
+        for (int j = i + 1; j < imgs.size(); j++) {
+            vector<KeyPoint> keypoints2;
+            surf_extractor(imgs[j], Mat(), keypoints2);
+            vector<DMatch> matches1to2;
+            descriptorMatcher->match(imgs[i], keypoints1, imgs[j], keypoints2, matches1to2);
+            for (int k = 0; k < matches1to2.size(); k++) {
+                printf("%f\n", matches1to2[k].distance);
+                currAvg[j] = currAvg[j] + matches1to2[k].distance;
+            }
+            currAvg[j] = currAvg[j] / matches1to2.size();
+            printf("CurrNumMatches %f\n", currAvg[j]);
+        }
+
+        float currMinAvg = 90001;
+        int currMinIndex = -1;
+        for (int j = i + 1; j < imgs.size(); j++) {
+            if (currAvg[j] < currMinAvg) {
+                currMinAvg = currAvg[j];
+                currMinIndex = j;
+            }
+        }
+
+        minAvg[i] = currMinAvg;
+        minIndex[i] = currMinIndex;
+    }
+
+    float finalMinAvg = 90001;
+    int finalMinIndex1 = 0;
+    int finalMinIndex2 = 0;
+    for (int j = 0; j < imgs.size(); j++) {
+        printf("Image %d had highest matches with %d, got %f\n", j, minIndex[j], minAvg[j]);
+        if (minAvg[j] < finalMinAvg) {
+            finalMinAvg = minAvg[j];
+            finalMinIndex1 = j;
+            finalMinIndex2 = minIndex[j];
+        }
+
+    }
+
+    printf("Highest number of matches was between %d and %d, there were %f\n", finalMinIndex1, finalMinIndex2, finalMinAvg);
+
+    vector<int> minIndexes;
+    minIndexes.push_back(finalMinIndex1);
+    minIndexes.push_back(finalMinIndex2);
+    return minIndexes;
+}
