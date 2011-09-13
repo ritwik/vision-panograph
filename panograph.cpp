@@ -24,6 +24,16 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    //For demo:
+    //horizontalAndVertical: first 4 images, 1298 - 1301
+    //blurring: 456, 457-2.9, 458
+    //horizontal: first 4
+
+    //Patch sizes
+    //For demo:
+    //blurring: 91
+    //everythingElse: 31
+
     //Get image names from args
     std::string alg_name = std::string(argv[1]);
     std::string params_filename = std::string(argv[2]);
@@ -64,6 +74,8 @@ int main(int argc, char** argv) {
         imgs[bestMatches[0]] = stitchedGray;
 
         //Newly stitched image is stored in bestMatches[0], so we erase image at bestMatches[1]
+        imgs[bestMatches[1]].release();
+
         imwrite("result.jpg", imgs_rgb[bestMatches[0]]);
         imgCount--;
     }
@@ -84,9 +96,11 @@ Mat stitchImages(Mat img1, Mat img2, Mat img1rgb, Mat img2rgb, Ptr<GenericDescri
     printf("Size width %d, size height %d\n", size2.width, size2.height);
 
     //Tweak this value, lower values detects more keypoints
-    //10.0e3 worked well for horizontal I think
-    //5.0e3 worked well for horizontalAndVertical
-    SURF surf_extractor(6.5e3);
+    //For demo:
+    //horizontalAndVertical: 5.0e3
+    //blurring: 4.0e3
+    //horizontal: 5.0e3 slow but nice
+    SURF surf_extractor(5.0e3);
 
     printf("Extracting keypoints...\n");
     vector<KeyPoint> keypoints1;
@@ -123,7 +137,12 @@ Mat stitchImages(Mat img1, Mat img2, Mat img1rgb, Mat img2rgb, Ptr<GenericDescri
         translated.y = translated.y + size2.height;
         points2.push_back(translated);
     }
-    Mat H = findHomography(Mat(points1), Mat(points2), RANSAC, 50);
+    //Higher values seems to accept worse transformations
+    //For demo:
+    //horizontalAndVertical: 50
+    //blurring: 90
+    //horizontal: 90
+    Mat H = findHomography(Mat(points1), Mat(points2), RANSAC, 90);
 
     printf("Applying perspective warp...\n");
     warpPerspective(img1rgb, result, H, result.size(), INTER_LINEAR, BORDER_TRANSPARENT);
@@ -136,8 +155,12 @@ Mat stitchImages(Mat img1, Mat img2, Mat img1rgb, Mat img2rgb, Ptr<GenericDescri
 
     //Attempt to detect when a correct transform could not be found and return the first input image
     if ((croppedResult.rows > 0.98 * result.rows) && (croppedResult.cols > 0.98 * result.cols)) {
-        printf("Image exploded, dropping it and returning first input image.\n");
-        return img1rgb;
+        printf("Image explosion detected! Dropping stitched image and returning larger input image.\n");
+        if ((img1rgb.rows * img1rgb.cols) > (img2rgb.rows * img2rgb.cols)) {
+            return img1rgb;
+        } else {
+            return img2rgb;
+        }
     } else {
         return croppedResult;
     }
@@ -172,9 +195,13 @@ Mat cropBlack(Mat toCrop, Mat toCropGray) {
 vector<int> findBestMatch(vector<Mat> imgs, Ptr<GenericDescriptorMatcher> descriptorMatcher) {
     //Use a high threshold so as to get fewer and stronger keypoints
     //Tweak this value, lower values detects more keypoints
+    //If you get a failure on this step, it's probably because 0 matches were found, so reduce the threshold
     //20.0e3 worked well for horizontal I think
-    //9.0e3 worked well for horizontalAndVertical
-    SURF surf_extractor(9.0e3);
+    //For demo:
+    //horizontalAndVertical: 9.0e3
+    //blurring: 14.0e3
+    //horizontal: 20.0e3
+    SURF surf_extractor(20.0e3);
 
     vector<KeyPoint> keypoints[imgs.size()];
     bool keypointsCalced[imgs.size()];
@@ -230,7 +257,6 @@ vector<int> findBestMatch(vector<Mat> imgs, Ptr<GenericDescriptorMatcher> descri
         avgMatchDistances.at<float>(i, minIndex2) = -2;
         avgMatchDistances.at<float>(minIndex2, i) = -2;
     }
-
 
     vector<int> minIndexes;
     minIndexes.push_back(minIndex1);
